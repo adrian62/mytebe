@@ -1,30 +1,32 @@
 #!/usr/bin/env python
-
+import logging
 import os
 import asyncio
+from logging import warning
+
 import can
 import cantools
 import jsonpickle
 import paho.mqtt.client as mqtt
 import paho.mqtt.publish as publish
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 import signal
 
-load_dotenv()
-mqttc = None
-notifier = None
-cache = {}
-channel = os.getenv('CHANNEL', 'can0')
-
-if channel.startswith('v'):
-    # Setting up a virtual interface
-    os.system('modprobe vcan')
-    os.system('ip link add {} type vcan bitrate 500000'.format(channel))
-    os.system('ip link set {} up'.format(channel))
-else:
-    # Connect to physical interface
-    os.system('ip link set {} type can bitrate 500000'.format(channel))
-    os.system('ifconfig {} up'.format(channel))
+# load_dotenv()
+# mqttc = None
+# notifier = None
+# cache = {}
+# channel = os.getenv('CHANNEL', 'can0')
+#
+# if channel.startswith('v'):
+#     # Setting up a virtual interface
+#     os.system('modprobe vcan')
+#     os.system('ip link add {} type vcan bitrate 500000'.format(channel))
+#     os.system('ip link set {} up'.format(channel))
+# else:
+#     # Connect to physical interface
+#     os.system('ip link set {} type can bitrate 500000'.format(channel))
+#     os.system('ifconfig {} up'.format(channel))
 
 def closeConnection():
     if channel.startswith('v'):
@@ -38,8 +40,8 @@ def closeConnection():
     mqttc.disconnect()
     print('Connection closed.')
 
-bus = can.interface.Bus(bustype='socketcan', channel=channel, bitrate=500000)
-db = cantools.database.load_file('./db/Model3CAN.dbc')
+#bus = can.interface.Bus(bustype='socketcan', channel=channel, bitrate=500000)
+#db = cantools.database.load_file('./db/Model3CAN.dbc')
 
 def initMQTT():
     # The callback for when the client receives a CONNACK response from the server.
@@ -79,22 +81,27 @@ def onMQTTMessage(client, userdata, msg):
         except can.CanError:
             print('CAN message not sent')
 
-def onCANMessage(msg: can.Message):
+def onCANMessage(msg: can.Message, sendToBus=True, database=None):
+    db = database or db
     try:
         details = db.get_message_by_frame_id(msg.arbitration_id)
-    except:
+    except KeyError as ke:
+        logging.warning(f'id {msg.arbitration_id} not found in database')
         pass
     else:
         try:
             data = db.decode_message(msg.arbitration_id, msg.data)
+            print(f"Success decoding data={data}")
+            if not sendToBus:
+                return
         except:
-            pass
-            # print('Decoding message failed for ID {}'.format(msg.arbitration_id))
+            # pass
+            print('Decoding message failed for ID {}'.format(msg.arbitration_id))
         else:
             if cache.get(msg.arbitration_id) != data:
                 cache[msg.arbitration_id] = data
                 # TODO: filter counters and checksums to reduce mqtt overhead
-                publish.single('/'.join(['tesberry', details.senders[0], details.name]) , jsonpickle.encode(data, unpicklable=False, max_depth=1).replace('"\'', '"').replace('\'"', '"'))
+                if sendToBus: publish.single('/'.join(['tesberry', details.senders[0], details.name]) , jsonpickle.encode(data, unpicklable=False, max_depth=1).replace('"\'', '"').replace('\'"', '"'))
 
 async def main():
     '''The main function that runs in the loop.'''
@@ -129,4 +136,4 @@ async def main():
         print('Closing Loop')
         pass
 
-asyncio.run(main())
+#asyncio.run(main())
